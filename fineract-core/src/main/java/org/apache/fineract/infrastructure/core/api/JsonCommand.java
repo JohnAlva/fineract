@@ -43,6 +43,8 @@ import org.apache.fineract.infrastructure.core.service.MathUtil;
 import org.apache.fineract.infrastructure.security.domain.BasicPasswordEncodablePlatformUser;
 import org.apache.fineract.infrastructure.security.domain.PlatformUser;
 import org.apache.fineract.infrastructure.security.service.PlatformPasswordEncoder;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * Immutable representation of a command.
@@ -597,4 +599,15 @@ public final class JsonCommand {
         this.fromApiJsonHelper.checkForUnsupportedParameters(typeOfMap, json, requestDataParameters);
     }
 
+    public String getClientIp() {
+        ServletRequestAttributes attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        String clientIp = "";
+        if (attrs != null) {
+            Object ipAttr = attrs.getRequest().getAttribute("IP");
+            if (ipAttr != null) {
+                clientIp = ipAttr.toString();
+            }
+        }
+        return clientIp;
+    }
 }

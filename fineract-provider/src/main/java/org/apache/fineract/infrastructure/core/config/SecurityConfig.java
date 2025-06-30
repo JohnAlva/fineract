@@ -32,6 +32,7 @@ import org.apache.fineract.infrastructure.businessdate.service.BusinessDateReadP
 import org.apache.fineract.infrastructure.cache.service.CacheWritePlatformService;
 import org.apache.fineract.infrastructure.configuration.domain.ConfigurationDomainService;
 import org.apache.fineract.infrastructure.core.domain.FineractRequestContextHolder;
+import org.apache.fineract.infrastructure.core.filters.CallerIpTrackingFilter;
 import org.apache.fineract.infrastructure.core.filters.CorrelationHeaderFilter;
 import org.apache.fineract.infrastructure.core.filters.IdempotencyStoreFilter;
 import org.apache.fineract.infrastructure.core.filters.IdempotencyStoreHelper;
@@ -115,6 +116,9 @@ public class SecurityConfig {
     @Autowired
     private IdempotencyStoreHelper idempotencyStoreHelper;
 
+    @Autowired(required = false)
+    private CallerIpTrackingFilter callerIpTrackingFilter;
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http //
@@ -172,7 +176,9 @@ public class SecurityConfig {
         } else {
             http.addFilterAfter(idempotencyStoreFilter(), FineractInstanceModeApiFilter.class); //
         }
-
+        if (callerIpTrackingFilter != null) {
+            http.addFilterAfter(callerIpTrackingFilter, RequestResponseFilter.class);
+        }
         if (fineractProperties.getSecurity().getTwoFactor().isEnabled()) {
             http.addFilterAfter(twoFactorAuthenticationFilter(), CorrelationHeaderFilter.class);
         } else {
