@@ -16,17 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.fineract.cob.data;
+package org.apache.fineract.test.messaging.event.loan.transaction;
 
-import lombok.AllArgsConstructor;
-import lombok.Data;
+public class LoanBuyDownFeeAmortizationTransactionCreatedBusinessEvent extends AbstractLoanTransactionEvent {
 
-@Data
-@AllArgsConstructor
-public class LoanCOBPartition {
-
-    private Long minId;
-    private Long maxId;
-    private Long pageNo;
-    private Long count;
+    @Override
+    public String getEventName() {
+        return "LoanBuyDownFeeAmortizationTransactionCreatedBusinessEvent";
+    }
 }

@@ -32,10 +32,8 @@ import org.apache.fineract.infrastructure.core.api.JsonCommand;
 import org.apache.fineract.infrastructure.core.data.CommandProcessingResult;
 import org.apache.fineract.infrastructure.core.data.CommandProcessingResultBuilder;
 import org.apache.fineract.infrastructure.core.domain.ExternalId;
-import org.apache.fineract.infrastructure.core.service.DateUtils;
 import org.apache.fineract.infrastructure.core.service.ExternalIdFactory;
 import org.apache.fineract.infrastructure.core.service.MathUtil;
-import org.apache.fineract.infrastructure.event.business.domain.loan.LoanBalanceChangedBusinessEvent;
 import org.apache.fineract.infrastructure.event.business.domain.loan.transaction.LoanBuyDownFeeAdjustmentTransactionCreatedBusinessEvent;
 import org.apache.fineract.infrastructure.event.business.domain.loan.transaction.LoanBuyDownFeeTransactionCreatedBusinessEvent;
 import org.apache.fineract.infrastructure.event.business.service.BusinessEventNotifierService;
@@ -46,7 +44,6 @@ import org.apache.fineract.portfolio.group.domain.Group;
 import org.apache.fineract.portfolio.group.exception.GroupNotActiveException;
 import org.apache.fineract.portfolio.loanaccount.domain.Loan;
 import org.apache.fineract.portfolio.loanaccount.domain.LoanBuyDownFeeBalance;
-import org.apache.fineract.portfolio.loanaccount.domain.LoanLifecycleStateMachine;
 import org.apache.fineract.portfolio.loanaccount.domain.LoanTransaction;
 import org.apache.fineract.portfolio.loanaccount.domain.LoanTransactionRelation;
 import org.apache.fineract.portfolio.loanaccount.domain.LoanTransactionRelationTypeEnum;
@@ -69,9 +66,6 @@ public class BuyDownFeeWritePlatformServiceImpl implements BuyDownFeePlatformSer
     private final NoteWritePlatformService noteWritePlatformService;
     private final ExternalIdFactory externalIdFactory;
     private final LoanBuyDownFeeBalanceRepository loanBuyDownFeeBalanceRepository;
-    private final ReprocessLoanTransactionsService reprocessLoanTransactionsService;
-    private final LoanBalanceService loanBalanceService;
-    private final LoanLifecycleStateMachine loanLifecycleStateMachine;
     private final BusinessEventNotifierService businessEventNotifierService;
 
     @Transactional
@@ -109,9 +103,6 @@ public class BuyDownFeeWritePlatformServiceImpl implements BuyDownFeePlatformSer
         // Create Buy Down Fee balance
         createBuyDownFeeBalance(buyDownFeeTransaction);
 
-        // Update loan derived fields
-        loan.updateLoanScheduleDependentDerivedFields();
-
         // Add note if provided
         final String noteText = command.stringValueOfParameterNamed("note");
         if (StringUtils.isNotBlank(noteText)) {
@@ -123,7 +114,6 @@ public class BuyDownFeeWritePlatformServiceImpl implements BuyDownFeePlatformSer
 
         // Notify business events
         businessEventNotifierService.notifyPostBusinessEvent(new LoanBuyDownFeeTransactionCreatedBusinessEvent(buyDownFeeTransaction));
-        businessEventNotifierService.notifyPostBusinessEvent(new LoanBalanceChangedBusinessEvent(loan));
 
         return new CommandProcessingResultBuilder() //
                 .withClientId(loan.getClientId()) //
@@ -170,9 +160,6 @@ public class BuyDownFeeWritePlatformServiceImpl implements BuyDownFeePlatformSer
         // Add transaction to loan
         loan.addLoanTransaction(buyDownFeeAdjustment);
 
-        // Recalculate loan transactions
-        recalculateLoanTransactions(loan, transactionDate, buyDownFeeAdjustment);
-
         // Save transaction
         LoanTransaction savedBuyDownFeeAdjustment = loanTransactionRepository.saveAndFlush(buyDownFeeAdjustment);
 
@@ -186,9 +173,6 @@ public class BuyDownFeeWritePlatformServiceImpl implements BuyDownFeePlatformSer
             loanBuyDownFeeBalanceRepository.save(buydownFeeBalance);
         }
 
-        // Update outstanding loan balances
-        loanBalanceService.updateLoanOutstandingBalances(loan);
-
         // Create a note if provided
         final String noteText = command.stringValueOfParameterNamed("note");
         if (StringUtils.isNotBlank(noteText)) {
@@ -197,25 +181,13 @@ public class BuyDownFeeWritePlatformServiceImpl implements BuyDownFeePlatformSer
         // Post journal entries
         loanJournalEntryPoster.postJournalEntries(loan, existingTransactionIds, existingReversedTransactionIds);
 
-        // Determine loan lifecycle transition
-        loanLifecycleStateMachine.determineAndTransition(loan, transactionDate);
-
         // Notify business events
         businessEventNotifierService
                 .notifyPostBusinessEvent(new LoanBuyDownFeeAdjustmentTransactionCreatedBusinessEvent(savedBuyDownFeeAdjustment));
-        businessEventNotifierService.notifyPostBusinessEvent(new LoanBalanceChangedBusinessEvent(loan));
 
         return new CommandProcessingResultBuilder().withEntityId(savedBuyDownFeeAdjustment.getId())
                 .withEntityExternalId(savedBuyDownFeeAdjustment.getExternalId()).withOfficeId(loan.getOfficeId())
                 .withClientId(loan.getClientId()).withLoanId(loan.getId()).build();
-    }
-
-    private void recalculateLoanTransactions(Loan loan, LocalDate transactionDate, LoanTransaction transaction) {
-        if (loan.isInterestBearingAndInterestRecalculationEnabled() || DateUtils.isBeforeBusinessDate(transactionDate)) {
-            reprocessLoanTransactionsService.reprocessTransactions(loan);
-        } else {
-            reprocessLoanTransactionsService.processLatestTransaction(transaction, loan);
-        }
     }
 
     private void checkClientOrGroupActive(final Loan loan) {

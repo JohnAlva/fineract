@@ -33,7 +33,6 @@ import org.apache.fineract.infrastructure.core.data.DataValidatorBuilder;
 import org.apache.fineract.infrastructure.core.domain.ExternalId;
 import org.apache.fineract.infrastructure.core.exception.PlatformApiDataValidationException;
 import org.apache.fineract.infrastructure.core.service.DateUtils;
-import org.apache.fineract.infrastructure.core.service.ExternalIdFactory;
 import org.apache.fineract.infrastructure.core.service.MathUtil;
 import org.apache.fineract.infrastructure.event.business.domain.loan.LoanAdjustTransactionBusinessEvent;
 import org.apache.fineract.infrastructure.event.business.domain.loan.LoanBalanceChangedBusinessEvent;
@@ -47,6 +46,7 @@ import org.apache.fineract.portfolio.loanaccount.data.HolidayDetailDTO;
 import org.apache.fineract.portfolio.loanaccount.data.ScheduleGeneratorDTO;
 import org.apache.fineract.portfolio.loanaccount.domain.Loan;
 import org.apache.fineract.portfolio.loanaccount.domain.LoanAccountDomainService;
+import org.apache.fineract.portfolio.loanaccount.domain.LoanBuyDownFeeBalance;
 import org.apache.fineract.portfolio.loanaccount.domain.LoanCapitalizedIncomeBalance;
 import org.apache.fineract.portfolio.loanaccount.domain.LoanCharge;
 import org.apache.fineract.portfolio.loanaccount.domain.LoanEvent;
@@ -59,9 +59,11 @@ import org.apache.fineract.portfolio.loanaccount.domain.LoanTransactionRepositor
 import org.apache.fineract.portfolio.loanaccount.domain.LoanTransactionType;
 import org.apache.fineract.portfolio.loanaccount.exception.InvalidLoanTransactionTypeException;
 import org.apache.fineract.portfolio.loanaccount.loanschedule.domain.LoanScheduleType;
+import org.apache.fineract.portfolio.loanaccount.repository.LoanBuyDownFeeBalanceRepository;
 import org.apache.fineract.portfolio.loanaccount.repository.LoanCapitalizedIncomeBalanceRepository;
 import org.apache.fineract.portfolio.loanaccount.serialization.LoanChargeValidator;
 import org.apache.fineract.portfolio.loanaccount.serialization.LoanTransactionValidator;
+import org.apache.fineract.portfolio.loanaccount.service.BuyDownFeePlatformService;
 import org.apache.fineract.portfolio.loanaccount.service.LoanAccrualTransactionBusinessEventService;
 import org.apache.fineract.portfolio.loanaccount.service.LoanAccrualsProcessingService;
 import org.apache.fineract.portfolio.loanaccount.service.LoanBalanceService;
@@ -100,7 +102,8 @@ public class LoanAdjustmentServiceImpl implements LoanAdjustmentService {
     private final LoanBalanceService loanBalanceService;
     private final ReprocessLoanTransactionsService reprocessLoanTransactionsService;
     private final LoanCapitalizedIncomeBalanceRepository loanCapitalizedIncomeBalanceRepository;
-    private final ExternalIdFactory externalIdFactory;
+    private final BuyDownFeePlatformService buyDownFeePlatformService;
+    private final LoanBuyDownFeeBalanceRepository loanBuyDownFeeBalanceRepository;
 
     @Override
     public CommandProcessingResult adjustLoanTransaction(Loan loan, LoanTransaction transactionToAdjust, LoanAdjustmentParameter parameter,
@@ -142,7 +145,6 @@ public class LoanAdjustmentServiceImpl implements LoanAdjustmentService {
             });
         }
 
-        LoanTransaction capitalizedIncomeAmortizationAdjustmentTransaction = null;
         if (transactionToAdjust.isCapitalizedIncome()) {
             if (newTransactionDetail.isNotZero()) {
                 throw new InvalidLoanTransactionTypeException("transaction", "capitalizedIncome.cannot.be.adjusted",
@@ -170,6 +172,31 @@ public class LoanAdjustmentServiceImpl implements LoanAdjustmentService {
                     .setAmountAdjustment(capitalizedIncomeBalance.getAmountAdjustment().subtract(transactionToAdjust.getAmount()));
             capitalizedIncomeBalance
                     .setUnrecognizedAmount(capitalizedIncomeBalance.getUnrecognizedAmount().add(transactionToAdjust.getAmount()));
+        }
+        if (transactionToAdjust.isBuyDownFee()) {
+            if (newTransactionDetail.isNotZero()) {
+                throw new InvalidLoanTransactionTypeException("transaction", "buy.down.fee.cannot.be.adjusted",
+                        "Buy down fee transaction cannot be adjusted");
+            }
+
+            LoanBuyDownFeeBalance buyDownFeeBalance = loanBuyDownFeeBalanceRepository.findByLoanIdAndLoanTransactionId(loan.getId(),
+                    transactionToAdjust.getId());
+
+            if (MathUtil.isGreaterThanZero(buyDownFeeBalance.getAmountAdjustment())) {
+                throw new InvalidLoanTransactionTypeException("transaction", "buy.down.fee.cannot.be.reversed.when.adjusted",
+                        "Buy down fee transaction cannot be reversed when non-reversed adjustment exists for it.");
+            }
+            loanBuyDownFeeBalanceRepository.delete(buyDownFeeBalance);
+        }
+        if (transactionToAdjust.isBuyDownFeeAdjustment()) {
+            if (newTransactionDetail.isNotZero()) {
+                throw new InvalidLoanTransactionTypeException("transaction", "buy.down.fee.adjustment.cannot.be.adjusted",
+                        "Buy down fee adjustment transaction cannot be adjusted");
+            }
+            LoanBuyDownFeeBalance buyDownFeeBalance = loanBuyDownFeeBalanceRepository.findBalanceForAdjustment(transactionToAdjust.getId());
+
+            buyDownFeeBalance.setAmountAdjustment(buyDownFeeBalance.getAmountAdjustment().subtract(transactionToAdjust.getAmount()));
+            buyDownFeeBalance.setUnrecognizedAmount(buyDownFeeBalance.getUnrecognizedAmount().add(transactionToAdjust.getAmount()));
         }
 
         LocalDate recalculateFrom = null;
@@ -284,10 +311,11 @@ public class LoanAdjustmentServiceImpl implements LoanAdjustmentService {
 
         if (!transactionForAdjustment.isAccrualRelated() && transactionForAdjustment.isNotRepaymentLikeType()
                 && transactionForAdjustment.isNotWaiver() && transactionForAdjustment.isNotCreditBalanceRefund()
-                && !transactionForAdjustment.isCapitalizedIncome() && !transactionForAdjustment.isCapitalizedIncomeAdjustment()) {
-            final String errorMessage = "Only (non-reversed) transactions of type repayment, waiver, accrual, credit balance refund, capitalized income or capitalized income adjustment can be adjusted.";
+                && !transactionForAdjustment.isDeferredIncome() && !transactionForAdjustment.isCapitalizedIncomeAdjustment()
+                && !transactionForAdjustment.isBuyDownFeeAdjustment()) {
+            final String errorMessage = "Only (non-reversed) transactions of type repayment, waiver, accrual, credit balance refund, capitalized income, capitalized income adjustment, buy down fee or buy down fee adjustment can be adjusted.";
             throw new InvalidLoanTransactionTypeException("transaction",
-                    "adjustment.is.only.allowed.to.repayment.or.waiver.or.creditbalancerefund.or.capitalizedIncome.or.capitalizedIncomeAdjustment.transactions",
+                    "adjustment.is.only.allowed.to.repayment.or.waiver.or.creditbalancerefund.or.capitalizedIncome.or.capitalizedIncomeAdjustment.or.buyDownFee.or.buyDownFeeAdjustment.transactions",
                     errorMessage);
         }
 

@@ -381,6 +381,9 @@ public class FineractProperties {
         private String bucketName;
         private String accessKey;
         private String secretKey;
+        private String region;
+        private String endpoint;
+        private Boolean pathStyleAddressingEnabled;
     }
 
     @Getter

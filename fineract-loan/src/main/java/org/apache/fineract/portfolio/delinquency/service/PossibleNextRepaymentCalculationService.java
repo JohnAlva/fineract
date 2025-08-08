@@ -16,13 +16,15 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.fineract.cob.data;
+package org.apache.fineract.portfolio.delinquency.service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import org.apache.fineract.portfolio.loanaccount.domain.Loan;
 
-public interface LoanIdAndLastClosedBusinessDate {
+public interface PossibleNextRepaymentCalculationService {
 
-    Long getId();
+    boolean canAccept(Loan loan);
 
-    LocalDate getLastClosedBusinessDate();
+    BigDecimal possibleNextRepaymentAmount(Loan loan, LocalDate nextPaymentDueDate);
 }
